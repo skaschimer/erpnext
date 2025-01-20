@@ -351,6 +351,15 @@ class SerialBatchBundle:
 		status = "Inactive"
 		if self.sle.actual_qty < 0:
 			status = "Delivered"
+			if self.sle.voucher_type == "Stock Entry":
+				purpose = frappe.get_cached_value("Stock Entry", self.sle.voucher_no, "purpose")
+				if purpose in [
+					"Manufacture",
+					"Material Issue",
+					"Repack",
+					"Material Consumption for Manufacture",
+				]:
+					status = "Consumed"
 
 		sn_table = frappe.qb.DocType("Serial No")
 
@@ -643,7 +652,10 @@ class BatchNoValuation(DeprecatedBatchNoValuation):
 		child = frappe.qb.DocType("Serial and Batch Entry")
 
 		timestamp_condition = ""
-		if self.sle.posting_date and self.sle.posting_time:
+		if self.sle.posting_date:
+			if self.sle.posting_time is None:
+				self.sle.posting_time = nowtime()
+
 			timestamp_condition = CombineDatetime(parent.posting_date, parent.posting_time) < CombineDatetime(
 				self.sle.posting_date, self.sle.posting_time
 			)
@@ -724,15 +736,6 @@ class BatchNoValuation(DeprecatedBatchNoValuation):
 			# New Stock Value Difference
 			stock_value_change = self.batch_avg_rate[batch_no] * ledger.qty
 			self.stock_value_change += stock_value_change
-
-			frappe.db.set_value(
-				"Serial and Batch Entry",
-				ledger.name,
-				{
-					"stock_value_difference": stock_value_change,
-					"incoming_rate": self.batch_avg_rate[batch_no],
-				},
-			)
 
 	def calculate_valuation_rate(self):
 		if not hasattr(self, "wh_data"):
@@ -947,12 +950,13 @@ class SerialBatchCreation:
 		if self.get("make_bundle_from_sle") and self.type_of_transaction == "Inward":
 			doc.flags.ignore_validate_serial_batch = True
 
-		doc.save()
-		self.validate_qty(doc)
-
 		if not hasattr(self, "do_not_submit") or not self.do_not_submit:
 			doc.flags.ignore_voucher_validation = True
 			doc.submit()
+		else:
+			doc.save()
+
+		self.validate_qty(doc)
 
 		return doc
 
